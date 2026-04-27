@@ -10,6 +10,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Telegram Mini App SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Monetag SDK -->
+    <script src='//libtl.com/sdk.js' data-zone='10934429' data-sdk='show_10934429'></script>
     
     <!-- Firebase ready promise — must be before module script -->
     <script>
@@ -19,12 +21,36 @@
         const tg = window.Telegram?.WebApp;
         if (tg) {
             tg.ready();
-            tg.expand(); // full screen
-            tg.disableVerticalSwipes?.(); // prevent accidental close
-            // Expose for use throughout app
+            tg.expand();
+            tg.disableVerticalSwipes?.();
             window._tgApp = tg;
             window._tgUser = tg.initDataUnsafe?.user || null;
         }
+
+        // ── Monetag In-App Interstitial (auto, passive) ──
+        window.addEventListener('load', () => {
+            try {
+                show_10934429({
+                    type: 'inApp',
+                    inAppSettings: {
+                        frequency: 2,
+                        capping: 0.1,
+                        interval: 30,
+                        timeout: 5,
+                        everyPage: false
+                    }
+                });
+            } catch(e) { /* SDK not ready yet — silently skip */ }
+        });
+
+        // ── Monetag Rewarded Ad — callable from anywhere ──
+        window.showRewardedAd = function(onRewarded) {
+            try {
+                show_10934429().then(() => {
+                    if (typeof onRewarded === 'function') onRewarded();
+                }).catch(() => { /* user closed or error — no reward */ });
+            } catch(e) { /* SDK not loaded */ }
+        };
     </script>
 
     <!-- Firebase SDKs -->
@@ -3362,6 +3388,19 @@
         }
 
         // ── Render home screen ──
+        // ── Rewarded Ad ──
+        function watchRewardedAd() {
+            const btn = document.getElementById('watchAdBtn');
+            if (btn) { btn.disabled = true; btn.querySelector('span').textContent = 'Loading...'; }
+            window.showRewardedAd(() => {
+                showNotification('🙏 Thank you for watching! Your support keeps Silranus running.', 'success', 5000);
+            });
+            // Re-enable after 10s regardless of outcome
+            setTimeout(() => {
+                if (btn) { btn.disabled = false; btn.querySelector('span').textContent = 'Watch Ad'; }
+            }, 10000);
+        }
+
         function walletRender() {
             const s = walletState;
 
@@ -4726,6 +4765,10 @@
                     <button class="wallet-action-btn" onclick="walletShowScreen('walletWithdraw')">
                         <i class="fas fa-arrow-up"></i>
                         <span>Withdraw</span>
+                    </button>
+                    <button class="wallet-action-btn" onclick="watchRewardedAd()" id="watchAdBtn">
+                        <i class="fas fa-play-circle"></i>
+                        <span>Watch Ad</span>
                     </button>
                 </div>
 
