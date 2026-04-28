@@ -1200,6 +1200,19 @@
                 <span id="googleSignInBtnText">Continue with Google</span>
             </button>
 
+            <!-- iOS Safari fallback button (hidden by default, shown on iOS) -->
+            <button id="iosSignInBtn" onclick="openInSafari()"
+                style="display:none;width:100%;align-items:center;justify-content:center;gap:12px;
+                padding:14px 20px;background:#fff;color:#1f1f1f;border:none;border-radius:12px;
+                font-size:16px;font-weight:600;cursor:pointer;transition:all 0.2s;margin-bottom:12px;">
+                <i class="fab fa-safari" style="font-size:20px;color:#006CFF;"></i>
+                <span>Open in Safari to Sign In</span>
+            </button>
+            <div id="iosSignInNote" style="display:none;text-align:center;font-size:12px;
+                color:var(--text-dim);margin-bottom:12px;line-height:1.6;">
+                Sign in via Safari, then return to Telegram to continue.
+            </div>
+
             <div id="googleSignInError" style="display:none;text-align:center;font-size:13px;
                 color:var(--error-red);margin-top:8px;padding:10px;background:rgba(244,33,46,0.08);
                 border-radius:8px;border:1px solid rgba(244,33,46,0.2);"></div>
@@ -1974,37 +1987,44 @@
             errEl.style.display = 'none';
 
             try {
-                const { GoogleAuthProvider, signInWithRedirect, signInWithPopup } = window.getAuthFunctions;
+                const { GoogleAuthProvider, signInWithRedirect } = window.getAuthFunctions;
                 const provider = new GoogleAuthProvider();
                 provider.setCustomParameters({ prompt: 'select_account' });
-
-                // iOS WebView (Telegram on iPhone) blocks signInWithRedirect
-                // Detect iOS and use signInWithPopup instead
-                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-                if (isIOS) {
-                    // signInWithPopup works on iOS via SFSafariViewController
-                    const result = await signInWithPopup(window.auth, provider);
-                    // Auth state change handles the rest
-                } else {
-                    await signInWithRedirect(window.auth, provider);
-                }
+                await signInWithRedirect(window.auth, provider);
             } catch(e) {
                 console.error('Google sign-in error:', e);
                 let msg = 'Sign-in failed. Please try again.';
-                if (e.code === 'auth/popup-blocked') msg = 'Popup blocked. Please allow popups and try again.';
-                else if (e.code === 'auth/cancelled-popup-request') msg = 'Sign-in cancelled.';
-                else if (e.code === 'auth/network-request-failed') msg = 'No internet connection.';
-                const errEl = document.getElementById('googleSignInError');
+                if (e.code === 'auth/network-request-failed') msg = 'No internet connection.';
                 errEl.textContent = msg;
                 errEl.style.display = 'block';
-                const btn = document.getElementById('googleSignInBtn');
-                const btnText = document.getElementById('googleSignInBtnText');
                 btn.disabled = false;
                 btnText.textContent = 'Continue with Google';
             }
         }
+
+        function openInSafari() {
+            // iOS users must sign in via Safari — Google blocks auth in WebViews
+            const appUrl = window.location.href.split('?')[0];
+            if (window._tgApp) {
+                window._tgApp.openLink(appUrl, { try_instant_view: false });
+            } else {
+                window.open(appUrl, '_blank');
+            }
+        }
+
+        // Show iOS button if on iOS inside Telegram WebView
+        window.addEventListener('load', () => {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            if (isIOS) {
+                const iosBtn = document.getElementById('iosSignInBtn');
+                const iosNote = document.getElementById('iosSignInNote');
+                const mainBtn = document.getElementById('googleSignInBtn');
+                if (iosBtn) iosBtn.style.display = 'flex';
+                if (iosNote) iosNote.style.display = 'block';
+                if (mainBtn) mainBtn.style.display = 'none';
+            }
+        });
 
         function initAuthListener() {
             const { onAuthStateChanged, getRedirectResult } = window.getAuthFunctions;
