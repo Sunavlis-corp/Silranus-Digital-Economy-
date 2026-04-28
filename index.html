@@ -87,6 +87,7 @@
             sendPasswordResetEmail,
             updateProfile,
             GoogleAuthProvider,
+            OAuthProvider,
             signInWithRedirect,
             signInWithPopup,
             getRedirectResult
@@ -121,6 +122,7 @@
             sendPasswordResetEmail,
             updateProfile,
             GoogleAuthProvider,
+            OAuthProvider,
             signInWithRedirect,
             signInWithPopup,
             getRedirectResult
@@ -1186,7 +1188,7 @@
                 </div>
             </div>
 
-            <!-- Google Sign In Button -->
+            <!-- Google Sign In Button (hidden on iOS) -->
             <button id="googleSignInBtn" onclick="signInWithGoogle()"
                 style="width:100%;display:flex;align-items:center;justify-content:center;gap:12px;
                 padding:14px 20px;background:#fff;color:#1f1f1f;border:none;border-radius:12px;
@@ -1200,18 +1202,16 @@
                 <span id="googleSignInBtnText">Continue with Google</span>
             </button>
 
-            <!-- iOS Safari fallback button (hidden by default, shown on iOS) -->
-            <button id="iosSignInBtn" onclick="openInSafari()"
+            <!-- Apple Sign In Button (shown on iOS, hidden elsewhere) -->
+            <button id="appleSignInBtn" onclick="signInWithApple()"
                 style="display:none;width:100%;align-items:center;justify-content:center;gap:12px;
-                padding:14px 20px;background:#fff;color:#1f1f1f;border:none;border-radius:12px;
+                padding:14px 20px;background:#000;color:#fff;border:1px solid #333;border-radius:12px;
                 font-size:16px;font-weight:600;cursor:pointer;transition:all 0.2s;margin-bottom:12px;">
-                <i class="fab fa-safari" style="font-size:20px;color:#006CFF;"></i>
-                <span>Open in Safari to Sign In</span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+                <span id="appleSignInBtnText">Continue with Apple</span>
             </button>
-            <div id="iosSignInNote" style="display:none;text-align:center;font-size:12px;
-                color:var(--text-dim);margin-bottom:12px;line-height:1.6;">
-                Sign in via Safari, then return to Telegram to continue.
-            </div>
 
             <div id="googleSignInError" style="display:none;text-align:center;font-size:13px;
                 color:var(--error-red);margin-top:8px;padding:10px;background:rgba(244,33,46,0.08);
@@ -1219,7 +1219,7 @@
 
             <div style="margin-top:20px;text-align:center;font-size:12px;color:var(--text-dim);line-height:1.7;">
                 By continuing, you agree to Silranus Terms of Service.<br>
-                Your Google account email is used for identity only.
+                Your account email is used for identity only.
             </div>
         </div>
     </div>
@@ -1978,6 +1978,23 @@
         // AUTH — Google Sign-In
         // =============================================
 
+        // Detect iOS (iPhone, iPad, iPod — including iPad in desktop mode)
+        const _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        // Show Apple button on iOS, Google button on everything else
+        window.addEventListener('load', () => {
+            const googleBtn = document.getElementById('googleSignInBtn');
+            const appleBtn  = document.getElementById('appleSignInBtn');
+            if (_isIOS) {
+                if (googleBtn) googleBtn.style.display = 'none';
+                if (appleBtn)  appleBtn.style.display  = 'flex';
+            } else {
+                if (googleBtn) googleBtn.style.display = 'flex';
+                if (appleBtn)  appleBtn.style.display  = 'none';
+            }
+        });
+
         async function signInWithGoogle() {
             const btn = document.getElementById('googleSignInBtn');
             const btnText = document.getElementById('googleSignInBtnText');
@@ -2002,38 +2019,55 @@
             }
         }
 
-        function openInSafari() {
-            // iOS users must sign in via Safari — Google blocks auth in WebViews
-            const appUrl = window.location.href.split('?')[0];
-            if (window._tgApp) {
-                window._tgApp.openLink(appUrl, { try_instant_view: false });
-            } else {
-                window.open(appUrl, '_blank');
+        async function signInWithApple() {
+            const btn     = document.getElementById('appleSignInBtn');
+            const btnText = document.getElementById('appleSignInBtnText');
+            const errEl   = document.getElementById('googleSignInError'); // reuse same error div
+            btn.disabled = true;
+            btnText.textContent = 'Signing in...';
+            errEl.style.display = 'none';
+
+            try {
+                const { OAuthProvider, signInWithPopup, signInWithRedirect } = window.getAuthFunctions;
+                const provider = new OAuthProvider('apple.com');
+                provider.addScope('email');
+                provider.addScope('name');
+
+                // Apple Sign-In works natively in Safari/iOS WebView — try popup first,
+                // fall back to redirect if popup is blocked.
+                try {
+                    const result = await signInWithPopup(window.auth, provider);
+                    // onAuthStateChanged will pick this up automatically
+                    console.log('Apple popup sign-in succeeded:', result.user.email);
+                } catch(popupErr) {
+                    if (popupErr.code === 'auth/popup-blocked' ||
+                        popupErr.code === 'auth/popup-closed-by-user') {
+                        // Fallback to redirect
+                        await signInWithRedirect(window.auth, provider);
+                    } else {
+                        throw popupErr;
+                    }
+                }
+            } catch(e) {
+                console.error('Apple sign-in error:', e);
+                let msg = 'Apple Sign-In failed. Please try again.';
+                if (e.code === 'auth/network-request-failed') msg = 'No internet connection.';
+                if (e.code === 'auth/cancelled-popup-request') { btn.disabled = false; btnText.textContent = 'Continue with Apple'; return; }
+                errEl.textContent = msg;
+                errEl.style.display = 'block';
+                btn.disabled = false;
+                btnText.textContent = 'Continue with Apple';
             }
         }
-
-        // Show iOS button if on iOS inside Telegram WebView
-        window.addEventListener('load', () => {
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-            if (isIOS) {
-                const iosBtn = document.getElementById('iosSignInBtn');
-                const iosNote = document.getElementById('iosSignInNote');
-                const mainBtn = document.getElementById('googleSignInBtn');
-                if (iosBtn) iosBtn.style.display = 'flex';
-                if (iosNote) iosNote.style.display = 'block';
-                if (mainBtn) mainBtn.style.display = 'none';
-            }
-        });
 
         function initAuthListener() {
             const { onAuthStateChanged, getRedirectResult } = window.getAuthFunctions;
 
-            // Handle redirect result first (returns from Google OAuth)
+            // Handle redirect result (Google redirect OR Apple redirect fallback)
             getRedirectResult(window.auth).then(result => {
                 if (result?.user) {
-                    // Redirect sign-in succeeded — onAuthStateChanged will handle the rest
-                    console.log('Google redirect sign-in succeeded:', result.user.email);
+                    console.log('Redirect sign-in succeeded:', result.user.email);
+                    // onAuthStateChanged handles the rest
                 }
             }).catch(e => {
                 console.error('Redirect result error:', e);
@@ -2042,10 +2076,11 @@
                     errEl.textContent = 'Sign-in failed. Please try again.';
                     errEl.style.display = 'block';
                 }
-                const btn = document.getElementById('googleSignInBtn');
-                const btnText = document.getElementById('googleSignInBtnText');
-                if (btn) btn.disabled = false;
-                if (btnText) btnText.textContent = 'Continue with Google';
+                // Re-enable whichever button is visible
+                const googleBtn = document.getElementById('googleSignInBtn');
+                const appleBtn  = document.getElementById('appleSignInBtn');
+                if (googleBtn) { googleBtn.disabled = false; const t = document.getElementById('googleSignInBtnText'); if (t) t.textContent = 'Continue with Google'; }
+                if (appleBtn)  { appleBtn.disabled  = false; const t = document.getElementById('appleSignInBtnText');  if (t) t.textContent = 'Continue with Apple'; }
             });
 
             onAuthStateChanged(window.auth, async (user) => {
@@ -2068,10 +2103,14 @@
                         loadPosts();
                     } else {
                         // New user — show profile setup (username + avatar)
-                        // Pre-fill display name from Google if available
+                        // Pre-fill display name from Google/Apple if available
                         const nameInput = document.getElementById('profileUsername');
                         if (nameInput && user.displayName) {
                             nameInput.value = user.displayName.replace(/\s+/g, '').toLowerCase().slice(0, 20);
+                        } else if (nameInput && user.email) {
+                            // Apple users may hide email — use email prefix as username hint
+                            const prefix = user.email.split('@')[0].replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
+                            if (prefix) nameInput.value = prefix;
                         }
                         showProfileSetup();
                     }
