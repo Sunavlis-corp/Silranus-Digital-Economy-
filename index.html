@@ -3054,6 +3054,7 @@
 
         // ── Open / Close ──
         function openWallet() {
+            _walletAdTrigger(); // counts toward the 3-tap ad trigger
             if (!currentUser) {
                 showAuthScreen();
                 return;
@@ -3088,6 +3089,9 @@
                 _refreshPriceForWithdraw();
                 _initWithdrawScreen();
             }
+
+            // Trigger rewarded ad on every 3rd wallet screen tap (not on back to home)
+            if (id !== 'walletHome') _walletAdTrigger();
         }
 
         async function _refreshPriceForWithdraw() {
@@ -3388,17 +3392,15 @@
         }
 
         // ── Render home screen ──
-        // ── Rewarded Ad ──
-        function watchRewardedAd() {
-            const btn = document.getElementById('watchAdBtn');
-            if (btn) { btn.disabled = true; btn.querySelector('span').textContent = 'Loading...'; }
-            window.showRewardedAd(() => {
-                showNotification('🙏 Thank you for watching! Your support keeps Silranus running.', 'success', 5000);
-            });
-            // Re-enable after 10s regardless of outcome
-            setTimeout(() => {
-                if (btn) { btn.disabled = false; btn.querySelector('span').textContent = 'Watch Ad'; }
-            }, 10000);
+        // ── Rewarded Ad — triggered by wallet interactions ──
+        let _walletTapCount = 0;
+        function _walletAdTrigger() {
+            _walletTapCount++;
+            if (_walletTapCount % 3 === 0) {
+                window.showRewardedAd(() => {
+                    showNotification('🙏 Thank you for your support!', 'success', 4000);
+                });
+            }
         }
 
         function walletRender() {
@@ -4765,10 +4767,6 @@
                     <button class="wallet-action-btn" onclick="walletShowScreen('walletWithdraw')">
                         <i class="fas fa-arrow-up"></i>
                         <span>Withdraw</span>
-                    </button>
-                    <button class="wallet-action-btn" onclick="watchRewardedAd()" id="watchAdBtn">
-                        <i class="fas fa-play-circle"></i>
-                        <span>Watch Ad</span>
                     </button>
                 </div>
 
