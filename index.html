@@ -88,6 +88,7 @@
             updateProfile,
             GoogleAuthProvider,
             signInWithRedirect,
+            signInWithPopup,
             getRedirectResult
         } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 
@@ -121,6 +122,7 @@
             updateProfile,
             GoogleAuthProvider,
             signInWithRedirect,
+            signInWithPopup,
             getRedirectResult
         };
 
@@ -1970,16 +1972,35 @@
             btn.disabled = true;
             btnText.textContent = 'Signing in...';
             errEl.style.display = 'none';
+
             try {
-                const { GoogleAuthProvider, signInWithRedirect } = window.getAuthFunctions;
+                const { GoogleAuthProvider, signInWithRedirect, signInWithPopup } = window.getAuthFunctions;
                 const provider = new GoogleAuthProvider();
                 provider.setCustomParameters({ prompt: 'select_account' });
-                await signInWithRedirect(window.auth, provider);
-                // Page will redirect — result handled in initAuthListener via getRedirectResult
+
+                // iOS WebView (Telegram on iPhone) blocks signInWithRedirect
+                // Detect iOS and use signInWithPopup instead
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+                if (isIOS) {
+                    // signInWithPopup works on iOS via SFSafariViewController
+                    const result = await signInWithPopup(window.auth, provider);
+                    // Auth state change handles the rest
+                } else {
+                    await signInWithRedirect(window.auth, provider);
+                }
             } catch(e) {
                 console.error('Google sign-in error:', e);
-                errEl.textContent = 'Sign-in failed. Please try again.';
+                let msg = 'Sign-in failed. Please try again.';
+                if (e.code === 'auth/popup-blocked') msg = 'Popup blocked. Please allow popups and try again.';
+                else if (e.code === 'auth/cancelled-popup-request') msg = 'Sign-in cancelled.';
+                else if (e.code === 'auth/network-request-failed') msg = 'No internet connection.';
+                const errEl = document.getElementById('googleSignInError');
+                errEl.textContent = msg;
                 errEl.style.display = 'block';
+                const btn = document.getElementById('googleSignInBtn');
+                const btnText = document.getElementById('googleSignInBtnText');
                 btn.disabled = false;
                 btnText.textContent = 'Continue with Google';
             }
