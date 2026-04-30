@@ -1345,6 +1345,11 @@
             <nav class="bottom-nav">
                 <div class="nav-item active" id="homeMobileBtn"><i class="fas fa-home"></i></div>
                 <div class="nav-item" id="socialMobileBtn"><i class="fas fa-wallet"></i></div>
+                <div class="nav-item" id="claimMobileBtn" onclick="openClaimScreen()" style="position:relative;">
+                    <i class="fas fa-coins"></i>
+                    <span id="claimDotBadge" style="display:none;position:absolute;top:6px;right:6px;
+                        width:8px;height:8px;background:#48c78e;border-radius:50%;border:2px solid var(--card-bg);"></span>
+                </div>
                 <div class="nav-item" id="newsMobileBtn"><i class="fas fa-rss"></i></div>
                 <div class="nav-item" id="hamburgerMobileBtn"><i class="fas fa-bars"></i></div>
             </nav>
@@ -3100,6 +3105,306 @@
         let _marketCountdownTimer = null;
 
         // ── Open / Close ──
+        // ═══════════════════════════════════════════
+        // DAILY CLAIM
+        // ═══════════════════════════════════════════
+        const CLAIM_REQUIRED_NGN   = 20000;
+        const CLAIM_REWARD_NGN     = 10;
+        const CLAIM_ADS_REQUIRED   = 5;
+        const CLAIM_LS_KEY         = 'silranus_claim';
+
+        function _getClaimState() {
+            try {
+                const today = new Date().toISOString().slice(0, 10);
+                const raw   = localStorage.getItem(CLAIM_LS_KEY);
+                const state = raw ? JSON.parse(raw) : {};
+                if (state.date !== today) return { date: today, adsWatched: 0, claimed: false };
+                return state;
+            } catch(e) { return { date: new Date().toISOString().slice(0, 10), adsWatched: 0, claimed: false }; }
+        }
+
+        function _saveClaimState(state) {
+            try { localStorage.setItem(CLAIM_LS_KEY, JSON.stringify(state)); } catch(e) {}
+        }
+
+        async function openClaimScreen() {
+            document.getElementById('claimOverlay').style.display = 'flex';
+
+            // Sync claim state with Firestore in case localStorage was cleared
+            try {
+                const today = new Date().toISOString().slice(0, 10);
+                const state = _getClaimState();
+                if (!state.claimed && currentUser) {
+                    const { doc, getDoc } = window.getFirestoreFunctions;
+                    const snap = await getDoc(doc(window.db, 'users', currentUser.uid));
+                    if (snap.exists() && snap.data().lastClaimDate === today) {
+                        state.claimed = true;
+                        _saveClaimState(state);
+                    }
+                }
+            } catch(e) { /* use localStorage state */ }
+
+            initClaimScreen();
+        }
+
+        function closeClaimScreen() {
+            document.getElementById('claimOverlay').style.display = 'none';
+        }
+
+        function initClaimScreen() {
+            const state = _getClaimState();
+
+            // Hide all cards first
+            ['claimEligibilityCard','claimRewardCard','claimAdSection',
+             'claimAlreadyCard','claimPriceWait'].forEach(id => {
+                document.getElementById(id).style.display = 'none';
+            });
+            document.getElementById('claimDotBadge').style.display = 'none';
+
+            // Already claimed today
+            if (state.claimed) {
+                document.getElementById('claimAlreadyCard').style.display = 'block';
+                return;
+            }
+
+            // Price not loaded
+            if (!walletState.srcPriceNGN || walletState.srcPriceNGN <= 0) {
+                document.getElementById('claimPriceWait').style.display = 'block';
+                return;
+            }
+
+            // Check eligibility
+            const balanceNGN = (walletState.balance || 0) * walletState.srcPriceNGN;
+            const eligible   = balanceNGN >= CLAIM_REQUIRED_NGN;
+            const rewardSRC  = CLAIM_REWARD_NGN / walletState.srcPriceNGN;
+            const fmtN = n => '₦' + n.toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+            // Show eligibility card
+            const eligCard  = document.getElementById('claimEligibilityCard');
+            const eligIcon  = document.getElementById('claimEligibilityIcon');
+            const eligTitle = document.getElementById('claimEligibilityTitle');
+            const eligDesc  = document.getElementById('claimEligibilityDesc');
+            eligCard.style.display = 'block';
+
+            if (eligible) {
+                eligIcon.textContent  = '🎉';
+                eligTitle.textContent = 'You\'re eligible!';
+                eligDesc.innerHTML    = `Your balance is <strong style="color:var(--accent-orange);">${fmtN(balanceNGN)}</strong> — above the ${fmtN(CLAIM_REQUIRED_NGN)} requirement.`;
+
+                // Show reward preview
+                document.getElementById('claimRewardAmount').textContent = rewardSRC.toFixed(4) + ' SRC';
+                document.getElementById('claimRewardCard').style.display = 'block';
+                document.getElementById('claimDotBadge').style.display = 'block';
+            } else {
+                eligIcon.textContent  = '❌';
+                eligTitle.textContent = 'Not eligible today';
+                eligDesc.innerHTML    = `Your balance is <strong>${fmtN(balanceNGN)}</strong>. You need at least <strong style="color:var(--accent-orange);">${fmtN(CLAIM_REQUIRED_NGN)}</strong> worth of SRC to claim.`;
+            }
+
+            // Show ad section (eligible or not — they watch first, then we check)
+            _renderClaimAdDots(state.adsWatched);
+            document.getElementById('claimAdSection').style.display = 'block';
+        }
+
+        function _renderClaimAdDots(watched) {
+            const dots = document.getElementById('claimAdDots');
+            const status = document.getElementById('claimAdStatus');
+            if (!dots) return;
+            dots.innerHTML = Array.from({length: CLAIM_ADS_REQUIRED}, (_, i) =>
+                `<div style="width:14px;height:14px;border-radius:50%;background:${i < watched ? '#48c78e' : 'var(--border-color)'};
+                transition:background 0.3s;"></div>`
+            ).join('');
+            if (status) status.textContent = `${watched} / ${CLAIM_ADS_REQUIRED} watched`;
+            const btn = document.getElementById('claimWatchBtn');
+            if (btn) {
+                if (watched >= CLAIM_ADS_REQUIRED) {
+                    btn.textContent = '🎁 Claim Now';
+                    btn.onclick = executeClaim;
+                } else {
+                    btn.innerHTML = '<i class="fas fa-play-circle"></i> Watch Ad';
+                    btn.onclick = claimWatchAd;
+                }
+            }
+        }
+
+        function claimWatchAd() {
+            const btn = document.getElementById('claimWatchBtn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Loading...'; }
+            window.showRewardedAd(() => {
+                const state = _getClaimState();
+                state.adsWatched = Math.min((state.adsWatched || 0) + 1, CLAIM_ADS_REQUIRED);
+                _saveClaimState(state);
+                _renderClaimAdDots(state.adsWatched);
+                showNotification('🙏 Thank you for your support!', 'success', 3000);
+            });
+            setTimeout(() => {
+                if (btn) { btn.disabled = false; }
+                const state = _getClaimState();
+                _renderClaimAdDots(state.adsWatched);
+            }, 10000);
+        }
+
+        async function executeClaim() {
+            const btn = document.getElementById('claimWatchBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Claiming...'; }
+
+            try {
+                // Re-check price
+                if (!walletState.srcPriceNGN || walletState.srcPriceNGN <= 0) {
+                    showNotification('Price data unavailable. Please try again.', 'error');
+                    return;
+                }
+
+                // Re-check eligibility
+                const balanceNGN = (walletState.balance || 0) * walletState.srcPriceNGN;
+                if (balanceNGN < CLAIM_REQUIRED_NGN) {
+                    const fmtN = n => '₦' + n.toLocaleString('en-NG', {minimumFractionDigits:2});
+                    showNotification(`Your balance doesn't meet the ${fmtN(CLAIM_REQUIRED_NGN)} requirement. Purchase more SRC to qualify.`, 'warning', 6000);
+                    const state = _getClaimState();
+                    state.adsWatched = 0;
+                    _saveClaimState(state);
+                    initClaimScreen();
+                    return;
+                }
+
+                const rewardSRC = CLAIM_REWARD_NGN / walletState.srcPriceNGN;
+                const today     = new Date().toISOString().slice(0, 10);
+
+                // Write to Firestore — runTransaction guards supply cap AND today's claim
+                const { doc, runTransaction, increment, addDoc, collection } = window.getFirestoreFunctions;
+                await runTransaction(window.db, async (txn) => {
+                    const userRef  = doc(window.db, 'users', currentUser.uid);
+                    const coinRef  = doc(window.db, 'coin_state', 'main');
+                    const [userSnap, coinSnap] = await Promise.all([txn.get(userRef), txn.get(coinRef)]);
+
+                    if (!userSnap.exists()) throw new Error('User not found');
+
+                    // Guard: already claimed today on Firestore (handles network-drop double-claim)
+                    const ud = userSnap.data();
+                    if (ud.lastClaimDate === today) throw new Error('ALREADY_CLAIMED');
+
+                    const circ = (coinSnap.exists() ? coinSnap.data().circulatingSupply : 0) || 0;
+                    if (circ + rewardSRC > 1_000_000) throw new Error('Supply cap reached');
+
+                    txn.update(userRef, {
+                        srcBalance:    increment(rewardSRC),
+                        lastClaimDate: today
+                    });
+                    txn.update(coinRef, { circulatingSupply: increment(rewardSRC) });
+                });
+
+                // Log on chain
+                await addDoc(collection(window.db, 'wallet_transactions'), {
+                    txId: 'claim_' + Math.random().toString(36).substr(2,8),
+                    type: 'DAILY_CLAIM',
+                    fromAddress: 'TREASURY',
+                    toAddress: walletState.addr || currentUser.uid,
+                    srcAmount: rewardSRC,
+                    rewardNGN: CLAIM_REWARD_NGN,
+                    priceNGNAtClaim: walletState.srcPriceNGN,
+                    status: 'CONFIRMED',
+                    timestamp: new Date(),
+                    uid: currentUser.uid
+                });
+
+                // Mark claimed in localStorage (UI only — Firestore is source of truth)
+                const state = _getClaimState();
+                state.claimed = true;
+                _saveClaimState(state);
+
+                // Update local wallet state
+                walletState.balance = (walletState.balance || 0) + rewardSRC;
+                _invalidateWalletCache();
+
+                showNotification(`🎉 Claimed ${rewardSRC.toFixed(4)} SRC! Come back tomorrow.`, 'success', 5000);
+                initClaimScreen();
+
+            } catch(e) {
+                console.error('Claim error:', e);
+                if (e.message === 'ALREADY_CLAIMED') {
+                    // Transaction confirmed they already claimed — sync localStorage
+                    const state = _getClaimState();
+                    state.claimed = true;
+                    _saveClaimState(state);
+                    showNotification('You\'ve already claimed today.', 'info');
+                    initClaimScreen();
+                } else {
+                    showNotification(e.message === 'Supply cap reached'
+                        ? 'Supply cap reached. Claim unavailable today.'
+                        : 'Claim failed. Please try again.', 'error');
+                }
+            } finally {
+                if (btn) { btn.disabled = false; }
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // WITHDRAW AD WALL
+        // ═══════════════════════════════════════════
+        const WITHDRAW_ADS_REQUIRED = 5;
+        const WITHDRAW_ADS_LS_KEY   = 'silranus_withdraw_ads';
+
+        function _getWithdrawAdsWatched() {
+            try { return parseInt(localStorage.getItem(WITHDRAW_ADS_LS_KEY) || '0', 10); } catch(e) { return 0; }
+        }
+
+        function _setWithdrawAdsWatched(n) {
+            try { localStorage.setItem(WITHDRAW_ADS_LS_KEY, String(n)); } catch(e) {}
+        }
+
+        function _resetWithdrawAds() {
+            try { localStorage.removeItem(WITHDRAW_ADS_LS_KEY); } catch(e) {}
+        }
+
+        function _renderWithdrawAdDots(watched) {
+            const dots   = document.getElementById('withdrawAdDots');
+            const status = document.getElementById('withdrawAdStatus');
+            if (!dots) return;
+            dots.innerHTML = Array.from({length: WITHDRAW_ADS_REQUIRED}, (_, i) =>
+                `<div style="width:14px;height:14px;border-radius:50%;background:${i < watched ? '#48c78e' : 'var(--border-color)'};
+                transition:background 0.3s;"></div>`
+            ).join('');
+            if (status) status.textContent = `${watched} / ${WITHDRAW_ADS_REQUIRED} watched`;
+        }
+
+        function initWithdrawAdWall() {
+            const watched = _getWithdrawAdsWatched();
+            if (watched >= WITHDRAW_ADS_REQUIRED) {
+                // Unlock form
+                document.getElementById('withdrawAdWall').style.display = 'none';
+                document.getElementById('withdrawForm').style.display   = 'block';
+            } else {
+                document.getElementById('withdrawAdWall').style.display = 'block';
+                document.getElementById('withdrawForm').style.display   = 'none';
+                _renderWithdrawAdDots(watched);
+            }
+        }
+
+        function withdrawWatchAd() {
+            const btn = document.getElementById('withdrawWatchBtn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Loading...'; }
+            window.showRewardedAd(() => {
+                const watched = _getWithdrawAdsWatched() + 1;
+                _setWithdrawAdsWatched(watched);
+                _renderWithdrawAdDots(Math.min(watched, WITHDRAW_ADS_REQUIRED));
+                showNotification('🙏 Thank you for your support!', 'success', 3000);
+                if (watched >= WITHDRAW_ADS_REQUIRED) {
+                    setTimeout(() => {
+                        document.getElementById('withdrawAdWall').style.display = 'none';
+                        document.getElementById('withdrawForm').style.display   = 'block';
+                    }, 800);
+                }
+            });
+            setTimeout(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-play-circle"></i> Watch Ad';
+                }
+                const watched = _getWithdrawAdsWatched();
+                _renderWithdrawAdDots(watched);
+            }, 10000);
+        }
+
         function openWallet() {
             _walletAdTrigger(); // counts toward the 3-tap ad trigger
             if (!currentUser) {
@@ -3451,6 +3756,14 @@
         }
 
         function walletRender() {
+            // Update claim dot badge
+            try {
+                const state = _getClaimState();
+                const balanceNGN = (walletState.balance || 0) * (walletState.srcPriceNGN || 0);
+                const showDot = !state.claimed && balanceNGN >= CLAIM_REQUIRED_NGN && walletState.srcPriceNGN > 0;
+                const dot = document.getElementById('claimDotBadge');
+                if (dot) dot.style.display = showDot ? 'block' : 'none';
+            } catch(e) {}
             const s = walletState;
 
             // Generate wallet address if missing (shouldn't happen but safety)
@@ -3889,6 +4202,7 @@
 
                 const fmtN = n => '₦' + n.toLocaleString('en-NG', {minimumFractionDigits:2});
                 showNotification(`✓ Withdrawal of ${fmtN(netNGN)} submitted! You'll receive payment to ${bankName} within 24 hours.`, 'success', 8000);
+                _resetWithdrawAds(); // reset ad wall for next withdrawal
                 document.getElementById('withdrawAmount').value = '';
                 document.getElementById('withdrawBankName').value = '';
                 document.getElementById('withdrawAccountNum').value = '';
@@ -4016,6 +4330,9 @@
 
         // ── Called when walletShowScreen('walletWithdraw') ──
         async function _initWithdrawScreen() {
+            // Show/hide ad wall first
+            initWithdrawAdWall();
+
             const submitBtn     = document.getElementById('withdrawSubmitBtn');
             const closedBanner  = document.getElementById('withdrawMarketClosedBanner');
             const pendingBanner = document.getElementById('withdrawPendingBanner');
@@ -4888,6 +5205,25 @@
             </div>
             <div class="wallet-screen-body">
 
+                <!-- Ad wall — shown until 5 ads watched -->
+                <div id="withdrawAdWall" style="text-align:center;padding:24px 0;">
+                    <div style="font-size:40px;margin-bottom:14px;">📺</div>
+                    <div style="font-size:17px;font-weight:800;margin-bottom:8px;">Watch Ads to Unlock Withdrawal</div>
+                    <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;line-height:1.6;">
+                        Watch 5 short ads to unlock the withdrawal form.
+                    </div>
+                    <div style="display:flex;justify-content:center;gap:10px;margin-bottom:16px;" id="withdrawAdDots"></div>
+                    <div style="font-size:13px;color:var(--text-dim);margin-bottom:20px;" id="withdrawAdStatus">0 / 5 watched</div>
+                    <button id="withdrawWatchBtn" onclick="withdrawWatchAd()"
+                        style="width:100%;padding:14px;background:var(--accent-orange);color:#fff;
+                        border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">
+                        <i class="fas fa-play-circle"></i> Watch Ad
+                    </button>
+                </div>
+
+                <!-- Actual withdraw form — hidden until 5 ads watched -->
+                <div id="withdrawForm" style="display:none;">
+
                 <!-- Market closed banner -->
                 <div id="withdrawMarketClosedBanner"
                     style="display:none;background:rgba(243,146,0,0.07);border:1px solid rgba(243,146,0,0.25);
@@ -4979,6 +5315,7 @@
                     Your SRC will be locked until payment is confirmed.
                     A 3% network fee applies. Minimum withdrawal: <strong style="color:var(--accent-orange);">₦1,000.00</strong>
                 </div>
+                </div><!-- end withdrawForm -->
             </div>
         </div>
 
@@ -5145,6 +5482,84 @@
 
     </div>
 
+
+    <!-- ═══════════════════════════════════════════
+         DAILY CLAIM OVERLAY
+    ═══════════════════════════════════════════ -->
+    <div id="claimOverlay" style="display:none;position:fixed;inset:0;background:var(--bg-color);
+        z-index:999;flex-direction:column;overflow-y:auto;">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:center;gap:12px;padding:16px 20px;
+            border-bottom:1px solid var(--border-color);position:sticky;top:0;
+            background:var(--bg-color);z-index:10;">
+            <button onclick="closeClaimScreen()" style="background:none;border:none;
+                color:var(--text-main);font-size:20px;cursor:pointer;padding:4px;">
+                <i class="fas fa-arrow-left"></i>
+            </button>
+            <div style="font-size:18px;font-weight:800;">
+                <i class="fas fa-coins" style="color:var(--accent-orange);margin-right:8px;"></i>Daily Claim
+            </div>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:24px 20px;max-width:480px;margin:0 auto;width:100%;">
+
+            <!-- Eligibility card -->
+            <div id="claimEligibilityCard" style="background:var(--card-bg);border:1px solid var(--border-color);
+                border-radius:16px;padding:20px;margin-bottom:20px;text-align:center;">
+                <div style="font-size:40px;margin-bottom:12px;" id="claimEligibilityIcon">⏳</div>
+                <div style="font-size:16px;font-weight:700;margin-bottom:6px;" id="claimEligibilityTitle">Checking eligibility...</div>
+                <div style="font-size:13px;color:var(--text-dim);line-height:1.6;" id="claimEligibilityDesc"></div>
+            </div>
+
+            <!-- Reward preview -->
+            <div id="claimRewardCard" style="display:none;background:rgba(243,146,0,0.08);
+                border:1px solid rgba(243,146,0,0.25);border-radius:16px;padding:16px;
+                margin-bottom:20px;text-align:center;">
+                <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">TODAY'S REWARD</div>
+                <div style="font-size:28px;font-weight:800;color:var(--accent-orange);" id="claimRewardAmount">— SRC</div>
+                <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">≈ ₦10.00</div>
+            </div>
+
+            <!-- Ad progress -->
+            <div id="claimAdSection" style="display:none;background:var(--card-bg);
+                border:1px solid var(--border-color);border-radius:16px;padding:20px;margin-bottom:20px;">
+                <div style="font-size:14px;font-weight:700;margin-bottom:16px;text-align:center;">
+                    Watch Ads to Claim
+                </div>
+                <div style="display:flex;justify-content:center;gap:10px;margin-bottom:16px;" id="claimAdDots"></div>
+                <div style="text-align:center;font-size:13px;color:var(--text-dim);margin-bottom:16px;" id="claimAdStatus">
+                    0 / 5 watched
+                </div>
+                <button id="claimWatchBtn" onclick="claimWatchAd()"
+                    style="width:100%;padding:14px;background:var(--accent-orange);color:#fff;
+                    border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">
+                    <i class="fas fa-play-circle"></i> Watch Ad
+                </button>
+            </div>
+
+            <!-- Already claimed -->
+            <div id="claimAlreadyCard" style="display:none;background:rgba(72,199,142,0.08);
+                border:1px solid rgba(72,199,142,0.25);border-radius:16px;padding:20px;text-align:center;">
+                <div style="font-size:36px;margin-bottom:10px;">✅</div>
+                <div style="font-size:16px;font-weight:700;color:#48c78e;margin-bottom:6px;">Claimed Today!</div>
+                <div style="font-size:13px;color:var(--text-dim);" id="claimNextReset">Resets at midnight</div>
+            </div>
+
+            <!-- Price not loaded -->
+            <div id="claimPriceWait" style="display:none;background:rgba(255,165,0,0.08);
+                border:1px solid rgba(255,165,0,0.25);border-radius:16px;padding:20px;text-align:center;">
+                <i class="fas fa-circle-notch fa-spin" style="font-size:24px;color:orange;margin-bottom:12px;display:block;"></i>
+                <div style="font-size:14px;font-weight:600;">Waiting for price data...</div>
+                <div style="font-size:12px;color:var(--text-dim);margin-top:6px;">Please wait a moment and try again.</div>
+                <button onclick="initClaimScreen()" style="margin-top:14px;padding:10px 20px;
+                    background:var(--accent-orange);color:#fff;border:none;border-radius:10px;
+                    font-size:13px;font-weight:600;cursor:pointer;">Retry</button>
+            </div>
+
+        </div>
+    </div>
 
     <!-- ═══════════════════════════════════════════
          NEWS HUB OVERLAY
